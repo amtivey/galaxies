@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Colliding Galaxies</title>
+<style>
+  :root { --bg: #000; --fg: #cde; --dim: #7890a0; --panel: rgba(10, 16, 28, 0.88); --line: #2a3a50; --accent: #6cf; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; overflow: hidden; }
+  canvas { display: block; }
+  .panel { position: absolute; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  #hud { top: 12px; left: 12px; font: 12px/1.5 ui-monospace, monospace; }
+  #hud table { border-collapse: collapse; }
+  #hud td, #hud th { padding: 0 8px; text-align: right; }
+  #hud th { color: var(--dim); font-weight: normal; }
+  #hud td:first-child { text-align: left; color: var(--dim); }
+  #time { font-size: 16px; color: var(--accent); margin-bottom: 4px; }
+  #hud { font-variant-numeric: tabular-nums; }
+  #controls { bottom: 12px; left: 50%; transform: translateX(-50%); width: min(720px, calc(100% - 24px)); display: flex; flex-direction: column; gap: 8px; }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: center; }
+  .bar label { display: flex; gap: 6px; align-items: center; }
+  input[type=range] { padding: 0; border: 0; background: none; }
+  #timeline { flex: 1; }
+  #speedOut { min-width: 8.5em; color: var(--dim); font: 12px ui-monospace, monospace; }
+  button, select, input { font: inherit; color: var(--fg); background: #132033; border: 1px solid var(--line); border-radius: 5px; padding: 5px 10px; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  kbd { color: var(--accent); }
+  #hud.off { display: none; }
+  button[aria-pressed=false] { opacity: 0.6; }
+  #status { color: var(--accent); min-width: 7em; text-align: center; }
+  #setup { top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(560px, calc(100% - 32px)); max-height: calc(100% - 32px); overflow: auto; }
+  #setup h1 { font-size: 18px; margin: 0 0 6px; }
+  #setup p { color: var(--dim); margin: 0 0 12px; font-size: 13px; }
+  fieldset { border: 1px solid var(--line); border-radius: 6px; margin: 0 0 10px; padding: 8px 10px; }
+  legend { color: var(--accent); padding: 0 4px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; margin: 4px 0; align-items: center; }
+  .row label { display: flex; gap: 6px; align-items: center; }
+  .row input { width: 76px; }
+  .actions { display: flex; gap: 8px; justify-content: flex-end; }
+  [hidden] { display: none !important; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+
+<div id="hud" class="panel" hidden>
+  <div id="time">Time 0</div>
+  <table>
+    <tr><th></th><th colspan="2">Target</th><th colspan="2">Intruder</th></tr>
+    <tr><th></th><th>start</th><th>now</th><th>start</th><th>now</th></tr>
+    <tbody id="hudRows"></tbody>
+  </table>
+</div>
+
+<div id="controls" class="panel" hidden>
+  <div class="bar">
+    <button id="pauseBtn"><kbd>P</kbd>ause</button>
+    <button id="iterBtn"><kbd>I</kbd>terations</button>
+    <button id="setupBtn"><kbd>S</kbd>et up</button>
+    <button id="dataBtn" aria-pressed="true"><kbd>D</kbd>ata</button>
+    <label>Speed <input id="speed" type="range" min="0" max="100" value="57" aria-label="Time steps per frame"></label>
+    <output id="speedOut" for="speed"></output>
+    <span id="status" aria-live="polite"></span>
+  </div>
+  <label class="bar">Timeline <input id="timeline" type="range" min="0" max="0" value="0" step="1" aria-label="Simulation time"></label>
+</div>
+
+<form id="setup" class="panel">
+  <h1>Colliding Galaxies</h1>
+  <p>After Andrew Rankin, <i>Acorn User</i>, July 1989. The target is a disc of stars in circular orbit (rings from 10 to 30 units) around a nucleus of 5 mass units at the origin. The intruder is a single point mass. Only the two nuclei exert gravity.</p>
+  <fieldset>
+    <legend>Starting values</legend>
+    <div class="row">
+      <label>Preset
+        <select id="preset">
+          <option value="">Custom</option>
+          <option value="ring" selected>Ring</option>
+          <option value="bridge">Bridge</option>
+          <option value="whirlpool">Whirlpool</option>
+          <option value="antennae">Half antennae</option>
+        </select>
+      </label>
+    </div>
+  </fieldset>
+  <fieldset>
+    <legend>Target galaxy</legend>
+    <div class="row">
+      <label>Rings <input name="rings" type="number" min="1" max="100" step="1" required></label>
+      <label>Stars per ring <input name="stpr" type="number" min="1" max="1000" step="1" required></label>
+    </div>
+  </fieldset>
+  <fieldset>
+    <legend>Intruder galaxy</legend>
+    <div class="row"><label>Mass (% of target) <input name="massfr" type="number" min="0" max="10000" step="any" required></label></div>
+    <div class="row">Position
+      <label>X <input name="d" type="number" min="-70" max="70" step="any" required></label>
+      <label>Y <input name="e" type="number" min="-70" max="70" step="any" required></label>
+      <label>Z <input name="f" type="number" min="-70" max="70" step="any" required></label>
+    </div>
+    <div class="row">Velocity
+      <label>X <input name="r" type="number" step="any" required></label>
+      <label>Y <input name="s" type="number" step="any" required></label>
+      <label>Z <input name="t" type="number" step="any" required></label>
+    </div>
+  </fieldset>
+  <div class="actions"><button type="submit">Start</button></div>
+</form>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// Constants from the original listing (lines 90, 600)
+const GALR = 30, GALM = 5, GALRI = 10, SF = 2;
+
+// Starting values from the table in the article
+const PRESETS = {
+  ring:      { rings: 4,  stpr: 30, massfr: 100, d: 7.5, e: 0,  f: 35, r: 0,  s: 0,     t: -1 },
+  bridge:    { rings: 4,  stpr: 30, massfr: 25,  d: 40,  e: 10, f: 10, r: -1, s: 0,     t: 0 },
+  whirlpool: { rings: 4,  stpr: 30, massfr: 100, d: -30, e: 30, f: 0,  r: 0,  s: -0.34, t: 0.34 },
+  antennae:  { rings: 15, stpr: 50, massfr: 100, d: 0,   e: 30, f: 10, r: 0,  s: 0,     t: -0.35 },
+};
+
+const $ = id => document.getElementById(id);
+const form = $('setup');
+
+function applyPreset(name) {
+  const p = PRESETS[name];
+  if (p) for (const k in p) form.elements[k].value = p[k];
+}
+$('preset').addEventListener('change', e => applyPreset(e.target.value));
+form.addEventListener('input', e => { if (e.target.id !== 'preset') $('preset').value = ''; });
+applyPreset('ring');
+
+// ---- Simulation state (names follow the BASIC: a,b,c / o,p,q = target; d,e,f / r,s,t = intruder)
+let sim = null;
+
+function createSim(v) {
+  const m = GALM, n = m * v.massfr / 100;
+  const count = v.rings * v.stpr;
+  const pos = new Float32Array(count * 3), vel = new Float32Array(count * 3);
+  const dr = v.rings > 1 ? (GALR - GALRI) / (v.rings - 1) : 0;
+  let i = 0;
+  for (let j = 0; j < v.rings; j++) {
+    const rad = j * dr + GALRI;
+    let vc = Math.sqrt(m / rad);
+    const theta = 0.5 * vc / rad;       // half-step offset for the leapfrog start
+    if (j === 0) vc *= 0.9;             // as in the original, line 760
+    for (let k = 0; k < v.stpr; k++, i++) {
+      const g = k * 2 * Math.PI / v.stpr;
+      pos[i*3] = rad * Math.cos(g);
+      pos[i*3+1] = rad * Math.sin(g);
+      vel[i*3] = -vc * Math.sin(g - theta);
+      vel[i*3+1] = vc * Math.cos(g - theta);
+    }
+  }
+  const S = {
+    m, n, count, pos, vel, time: 0, stop: -1, maxTime: 0,
+    tgt: { p: [0, 0, 0], v: [0, 0, 0] },
+    int: { p: [v.d, v.e, v.f], v: [v.r, v.s, v.t] },
+    // Snapshot interval: roughly constant memory per step whatever the star count
+    every: Math.max(10, Math.ceil(count / 75)),
+    snaps: new Map(),
+    prev: { pos: pos.slice(), tgt: [0, 0, 0], int: [v.d, v.e, v.f] },   // previous step, for interpolation
+    draw: new Float32Array(count * 3),
+  };
+  S.start = { tp: [...S.tgt.p], tv: [...S.tgt.v], ip: [...S.int.p], iv: [...S.int.v] };
+  S.snaps.set(0, snapshot(S));
+  return S;
+}
+
+const snapshot = S => ({ time: S.time, pos: S.pos.slice(), vel: S.vel.slice(),
+  tgt: { p: [...S.tgt.p], v: [...S.tgt.v] }, int: { p: [...S.int.p], v: [...S.int.v] } });
+
+function syncPrev(S) {
+  S.prev.pos.set(S.pos); S.prev.tgt = [...S.tgt.p]; S.prev.int = [...S.int.p];
+}
+
+function advance(S) {
+  syncPrev(S);
+  step(S);
+  if (S.time % S.every === 0 && !S.snaps.has(S.time)) S.snaps.set(S.time, snapshot(S));
+  S.maxTime = Math.max(S.maxTime, S.time);
+}
+
+// The model is deterministic, so seeking = restore the nearest earlier snapshot and re-run
+function seek(S, t) {
+  const k = S.snaps.get(Math.floor(t / S.every) * S.every);
+  S.time = k.time; S.pos.set(k.pos); S.vel.set(k.vel);
+  S.tgt = { p: [...k.tgt.p], v: [...k.tgt.v] }; S.int = { p: [...k.int.p], v: [...k.int.v] };
+  while (S.time < t) step(S);
+  syncPrev(S);
+}
+
+function step(S) {
+  const [a, b, c] = S.tgt.p, [d, e, f] = S.int.p, { m, n, pos, vel } = S;
+  for (let i = 0; i < S.count * 3; i += 3) {
+    const x = pos[i], y = pos[i+1], z = pos[i+2];
+    const f1 = m / ((x-a)**2 + (y-b)**2 + (z-c)**2 + SF) ** 1.5;
+    const f2 = n / ((x-d)**2 + (y-e)**2 + (z-f)**2 + SF) ** 1.5;
+    vel[i]   += f1 * (a - x) + f2 * (d - x);
+    vel[i+1] += f1 * (b - y) + f2 * (e - y);
+    vel[i+2] += f1 * (c - z) + f2 * (f - z);
+    pos[i] += vel[i]; pos[i+1] += vel[i+1]; pos[i+2] += vel[i+2];
+  }
+  const rad = ((a-d)**2 + (b-e)**2 + (c-f)**2 + SF) ** 1.5;
+  for (let k = 0; k < 3; k++) {
+    const ax = (S.int.p[k] - S.tgt.p[k]) / rad;
+    S.tgt.v[k] += n * ax;
+    S.int.v[k] -= m * ax;
+  }
+  for (let k = 0; k < 3; k++) { S.tgt.p[k] += S.tgt.v[k]; S.int.p[k] += S.int.v[k]; }
+  S.time++;
+}
+
+// ---- Scene
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+document.body.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, 1, 0.5, 1e6);
+scene.add(camera);
+camera.up.set(0, 0, 1);
+const HOME = new THREE.Vector3(0, -110, 70);
+camera.position.copy(HOME);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+// Zoom follows the galaxies until the user zooms with the wheel
+let autoZoom = true;
+renderer.domElement.addEventListener('wheel', () => { autoZoom = false; }, { passive: true });
+
+// Background starfield, carried with the camera so zooming never reaches it
+{
+  const g = new THREE.BufferGeometry(), N = 2000, p = new Float32Array(N * 3);
+  for (let i = 0; i < N * 3; i++) p[i] = (Math.random() - 0.5) * 4000;
+  g.setAttribute('position', new THREE.BufferAttribute(p, 3));
+  camera.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0x334455, size: 1.5, sizeAttenuation: false })));
+}
+
+const world = new THREE.Group();    // shifted so the barycentre stays at the origin (as line 1370)
+scene.add(world);
+const grid = new THREE.PolarGridHelper(60, 12, 6, 64, 0x1a2a3a, 0x1a2a3a);
+grid.rotation.x = Math.PI / 2;
+scene.add(grid);
+
+const nucleusGeo = new THREE.SphereGeometry(1, 24, 16);
+const tgtMesh = new THREE.Mesh(nucleusGeo, new THREE.MeshBasicMaterial({ color: 0xffe9a0 }));
+const intMesh = new THREE.Mesh(nucleusGeo, new THREE.MeshBasicMaterial({ color: 0xff8a6a }));
+world.add(tgtMesh, intMesh);
+
+// Click a nucleus to keep the camera centred on it; any camera change by the user ends that
+let follow = null, followOffset = new THREE.Vector3(), downAt = null;
+const nucleusPos = mesh => mesh.position.clone().add(world.position);
+function nucleusUnder(e) {
+  if (!sim) return null;
+  let best = null, bestD = 20;   // pixels
+  for (const mesh of [tgtMesh, intMesh]) {
+    if (!mesh.visible) continue;
+    const p = nucleusPos(mesh).project(camera);
+    if (p.z > 1) continue;
+    const d = Math.hypot((p.x + 1) / 2 * innerWidth - e.clientX, (1 - p.y) / 2 * innerHeight - e.clientY);
+    if (d < bestD) { best = mesh; bestD = d; }
+  }
+  return best;
+}
+controls.addEventListener('start', () => { follow = null; });
+renderer.domElement.addEventListener('pointerdown', e => { downAt = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener('pointerup', e => {
+  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) return;
+  follow = nucleusUnder(e);
+  if (follow) followOffset.copy(controls.target).sub(nucleusPos(follow));
+});
+renderer.domElement.addEventListener('pointermove', e => {
+  if (e.buttons === 0) renderer.domElement.style.cursor = nucleusUnder(e) ? 'pointer' : '';
+});
+function updateFollow() {
+  if (!follow) return;
+  followOffset.multiplyScalar(0.85);   // glide over, then stay locked on
+  const target = nucleusPos(follow).add(followOffset);
+  camera.position.add(target.clone().sub(controls.target));
+  controls.target.copy(target);
+}
+
+let points = null;
+function buildPoints(S, rings, stpr) {
+  if (points) { world.remove(points); points.geometry.dispose(); points.material.dispose(); }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(S.draw, 3));
+  const col = new Float32Array(S.count * 3), c = new THREE.Color();
+  for (let i = 0; i < S.count; i++) {
+    c.setHSL(0.6 - 0.45 * Math.floor(i / stpr) / Math.max(1, rings - 1), 0.7, 0.72);
+    col.set([c.r, c.g, c.b], i * 3);
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  points = new THREE.Points(g, new THREE.PointsMaterial({ size: 2.5, sizeAttenuation: false, vertexColors: true }));
+  points.frustumCulled = false;
+  world.add(points);
+}
+
+function resize() {
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+
+// ---- HUD
+const fmt = x => Number.isInteger(x) ? String(x) : x.toPrecision(5);
+let hudTime = -1;
+function updateHud(S) {
+  if (S.time === hudTime) return;
+  hudTime = S.time;
+  $('time').textContent = `Time ${S.time}`;
+  const rows = [['Mass', S.m, S.m, S.n, S.n]];
+  ['X', 'Y', 'Z'].forEach((ax, k) => rows.push([`${ax} coordinate`, S.start.tp[k], S.tgt.p[k], S.start.ip[k], S.int.p[k]]));
+  ['X', 'Y', 'Z'].forEach((ax, k) => rows.push([`Velocity (${ax})`, S.start.tv[k], S.tgt.v[k], S.start.iv[k], S.int.v[k]]));
+  $('hudRows').innerHTML = rows.map(r => `<tr><td>${r[0]}</td>${r.slice(1).map(v => `<td>${fmt(v)}</td>`).join('')}</tr>`).join('');
+  // Only ever grow, so the panel doesn't jitter as numbers change length
+  const hud = $('hud');
+  hud.style.minWidth = Math.max(hud.offsetWidth, parseFloat(hud.style.minWidth) || 0) + 'px';
+  const tl = $('timeline');
+  tl.max = S.maxTime;
+  tl.value = S.time;
+}
+
+// Draws the state `a` of the way from the previous step to the current one
+function render(S, a) {
+  const { m, n, prev, pos, draw } = S;
+  for (let i = 0; i < draw.length; i++) draw[i] = prev.pos[i] + (pos[i] - prev.pos[i]) * a;
+  const tp = S.tgt.p.map((x, k) => prev.tgt[k] + (x - prev.tgt[k]) * a);
+  const ip = S.int.p.map((x, k) => prev.int[k] + (x - prev.int[k]) * a);
+  const bary = tp.map((t, k) => (m * t + n * ip[k]) / (m + n));
+  world.position.set(-bary[0], -bary[1], -bary[2]);
+  tgtMesh.position.fromArray(tp);
+  intMesh.position.fromArray(ip);
+  intMesh.visible = n > 0;
+  intMesh.scale.setScalar(n > 0 ? Math.max(0.5, Math.cbrt(n / m)) : 1);
+  points.geometry.attributes.position.needsUpdate = true;
+  updateHud(S);
+  if (autoZoom) {
+    // Keep both nuclei plus the disc radius in frame; never closer than the starting view
+    const reach = Math.max(...[tp, ip].map(p => Math.hypot(p[0] - bary[0], p[1] - bary[1], p[2] - bary[2]))) + GALR + 5;
+    const fit = reach / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / Math.min(1, camera.aspect);
+    const offset = camera.position.clone().sub(controls.target);
+    offset.setLength(THREE.MathUtils.lerp(offset.length(), Math.max(HOME.length(), fit), 0.05));
+    camera.position.copy(controls.target).add(offset);
+  }
+}
+
+// ---- Controls
+let paused = false;
+function setPaused(v) {
+  paused = v;
+  $('pauseBtn').innerHTML = paused ? '<kbd>P</kbd>lay' : '<kbd>P</kbd>ause';
+  $('status').textContent = paused ? '…waiting…' : (sim && sim.stop > sim.time ? `→ time ${sim.stop}` : 'running');
+}
+
+form.addEventListener('submit', e => {
+  e.preventDefault();
+  const v = Object.fromEntries([...new FormData(form)].map(([k, x]) => [k, Number(x)]));
+  sim = createSim(v);
+  buildPoints(sim, v.rings, v.stpr);
+  form.hidden = true;
+  $('hud').hidden = $('controls').hidden = false;
+  $('hud').style.minWidth = '';
+  hudTime = -1; frac = 1;
+  autoZoom = true;
+  follow = null;
+  controls.target.set(0, 0, 0);
+  camera.position.copy(HOME);
+  setPaused(true);
+  $('pauseBtn').focus();
+  render(sim, 1);
+});
+
+function toSetup() {
+  sim = null;
+  form.hidden = false;
+  $('hud').hidden = $('controls').hidden = true;
+  form.querySelector('button').focus();
+}
+
+function iterate() {
+  if (!sim) return;
+  const t = prompt('Iterate until time =', sim.time + 50);
+  if (t === null) return;
+  const n = Math.floor(Number(t));
+  if (!Number.isFinite(n) || n <= sim.time) return;
+  sim.stop = n;
+  setPaused(false);
+}
+
+$('pauseBtn').onclick = () => sim && setPaused(!paused);
+$('iterBtn').onclick = iterate;
+$('setupBtn').onclick = toSetup;
+function toggleData() {
+  const off = $('hud').classList.toggle('off');
+  $('dataBtn').setAttribute('aria-pressed', String(!off));
+}
+$('dataBtn').onclick = toggleData;
+addEventListener('keydown', e => {
+  if (!sim || e.target.matches('input:not([type=range]), select') || e.ctrlKey || e.metaKey || e.altKey) return;
+  const k = e.key.toUpperCase();
+  if (k === 'P') setPaused(!paused);
+  else if (k === 'I') iterate();
+  else if (k === 'S') toSetup();
+  else if (k === 'D') toggleData();
+});
+
+// Speed slider is logarithmic: 0.02 to 20 time steps per frame
+const stepsPerFrame = () => 0.02 * 1000 ** ($('speed').value / 100);
+const showSpeed = () => { const s = stepsPerFrame(); $('speedOut').value = `${s < 1 ? s.toFixed(2) : s.toFixed(1)} steps/frame`; };
+$('speed').addEventListener('input', showSpeed);
+showSpeed();
+
+$('timeline').addEventListener('input', e => {
+  if (!sim) return;
+  seek(sim, Number(e.target.value));
+  frac = 1;
+});
+
+let frac = 0;   // progress towards the next step, for smooth motion at slow speeds
+renderer.setAnimationLoop(() => {
+  if (sim) {
+    if (!paused) {
+      frac += stepsPerFrame();
+      while (frac >= 1) {
+        advance(sim);
+        frac -= 1;
+        if (sim.time === sim.stop) { sim.stop = -1; frac = 1; setPaused(true); break; }
+      }
+    }
+    render(sim, frac);
+    updateFollow();
+  }
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
