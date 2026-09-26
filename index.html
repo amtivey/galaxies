@@ -66,7 +66,7 @@
     <button id="iterBtn"><kbd>I</kbd>terations</button>
     <button id="setupBtn"><kbd>S</kbd>et up</button>
     <button id="dataBtn" aria-pressed="true"><kbd>D</kbd>ata</button>
-    <label>Speed <input id="speed" type="range" min="0" max="100" value="57" aria-label="Time steps per frame"></label>
+    <label>Speed <input id="speed" type="range" min="0" max="100" step="any" value="23.299" aria-label="Time steps per frame"></label>
     <output id="speedOut" for="speed"></output>
     <span id="status" aria-live="polite"></span>
   </div>
@@ -123,9 +123,9 @@ const GALR = 30, GALM = 5, GALRI = 10, SF = 2;
 
 // Starting values from the table in the article
 const PRESETS = {
-  ring:      { rings: 4,  stpr: 30, massfr: 100, d: 7.5, e: 0,  f: 35, r: 0,  s: 0,     t: -1 },
-  bridge:    { rings: 4,  stpr: 30, massfr: 25,  d: 40,  e: 10, f: 10, r: -1, s: 0,     t: 0 },
-  whirlpool: { rings: 4,  stpr: 30, massfr: 100, d: -30, e: 30, f: 0,  r: 0,  s: -0.34, t: 0.34 },
+  ring:      { rings: 20, stpr: 150, massfr: 100, d: 7.5, e: 0,  f: 35, r: 0,  s: 0,     t: -1 },
+  bridge:    { rings: 20, stpr: 150, massfr: 25,  d: 40,  e: 10, f: 10, r: -1, s: 0,     t: 0 },
+  whirlpool: { rings: 20, stpr: 150, massfr: 100, d: -30, e: 30, f: 0,  r: 0,  s: -0.34, t: 0.34 },
   antennae:  { rings: 15, stpr: 50, massfr: 100, d: 0,   e: 30, f: 10, r: 0,  s: 0,     t: -0.35 },
 };
 
@@ -265,8 +265,8 @@ const tgtMesh = new THREE.Mesh(nucleusGeo, new THREE.MeshBasicMaterial({ color: 
 const intMesh = new THREE.Mesh(nucleusGeo, new THREE.MeshBasicMaterial({ color: 0xff8a6a }));
 world.add(tgtMesh, intMesh);
 
-// Click a nucleus to keep the camera centred on it; rotating or panning ends that, zooming
-// (wheel or two-finger pinch) doesn't
+// Click a nucleus to keep the camera centred on it. Only panning (right-drag, or modifier +
+// left-drag, as OrbitControls does) ends that; rotating and zooming (wheel or pinch) don't
 let follow = null, followOffset = new THREE.Vector3(), downAt = null;
 const nucleusPos = mesh => mesh.position.clone().add(world.position);
 function nucleusUnder(e) {
@@ -284,6 +284,7 @@ function nucleusUnder(e) {
 const pointers = new Set();
 let pinching = false;   // set once a gesture uses two fingers, until all are lifted
 const dragged = e => downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4;
+const isPan = e => e.pointerType === 'mouse' && ((e.buttons & 2) || ((e.buttons & 1) && (e.ctrlKey || e.metaKey || e.shiftKey)));
 renderer.domElement.addEventListener('pointerdown', e => {
   pointers.add(e.pointerId);
   if (pointers.size > 1) { pinching = true; autoZoom = false; }
@@ -304,7 +305,7 @@ renderer.domElement.addEventListener('pointerup', e => {
 });
 renderer.domElement.addEventListener('pointermove', e => {
   if (e.buttons === 0) renderer.domElement.style.cursor = nucleusUnder(e) ? 'pointer' : '';
-  else if (!pinching && dragged(e)) follow = null;
+  else if (!pinching && dragged(e) && isPan(e)) follow = null;
 });
 function updateFollow() {
   if (!follow) return;
