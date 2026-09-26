@@ -227,7 +227,6 @@ renderer.setPixelRatio(devicePixelRatio);
 document.body.prepend(renderer.domElement);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(50, 1, 0.5, 1e6);
-scene.add(camera);
 camera.up.set(0, 0, 1);
 const HOME = new THREE.Vector3(0, -110, 70);
 camera.position.copy(HOME);
@@ -237,12 +236,22 @@ controls.enableDamping = true;
 let autoZoom = true;
 renderer.domElement.addEventListener('wheel', () => { autoZoom = false; }, { passive: true });
 
-// Background starfield, carried with the camera so zooming never reaches it
-{
-  const g = new THREE.BufferGeometry(), N = 2000, p = new Float32Array(N * 3);
-  for (let i = 0; i < N * 3; i++) p[i] = (Math.random() - 0.5) * 4000;
-  g.setAttribute('position', new THREE.BufferAttribute(p, 3));
-  camera.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0x334455, size: 1.5, sizeAttenuation: false })));
+// Background starfield: fixed in space (so camera motion shows against it) but tiled
+// endlessly around the camera, so zooming out never reaches its edge
+const BG_SIZE = 1500;
+const bgBase = Float32Array.from({ length: 3000 * 3 }, () => Math.random() * BG_SIZE);
+const bgGeo = new THREE.BufferGeometry();
+bgGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(bgBase.length), 3));
+const bgStars = new THREE.Points(bgGeo, new THREE.PointsMaterial({ color: 0x334455, size: 1.5, sizeAttenuation: false }));
+bgStars.frustumCulled = false;
+scene.add(bgStars);
+function updateBackground() {
+  const pos = bgGeo.attributes.position.array, cam = camera.position.toArray();
+  for (let i = 0; i < pos.length; i++) {
+    const c = cam[i % 3];
+    pos[i] = c + (((bgBase[i] - c) % BG_SIZE) + BG_SIZE) % BG_SIZE - BG_SIZE / 2;
+  }
+  bgGeo.attributes.position.needsUpdate = true;
 }
 
 const world = new THREE.Group();    // shifted so the barycentre stays at the origin (as line 1370)
@@ -256,7 +265,8 @@ const tgtMesh = new THREE.Mesh(nucleusGeo, new THREE.MeshBasicMaterial({ color: 
 const intMesh = new THREE.Mesh(nucleusGeo, new THREE.MeshBasicMaterial({ color: 0xff8a6a }));
 world.add(tgtMesh, intMesh);
 
-// Click a nucleus to keep the camera centred on it; any camera change by the user ends that
+// Click a nucleus to keep the camera centred on it; rotating or panning ends that, zooming
+// (wheel or two-finger pinch) doesn't
 let follow = null, followOffset = new THREE.Vector3(), downAt = null;
 const nucleusPos = mesh => mesh.position.clone().add(world.position);
 function nucleusUnder(e) {
@@ -271,15 +281,30 @@ function nucleusUnder(e) {
   }
   return best;
 }
-controls.addEventListener('start', () => { follow = null; });
-renderer.domElement.addEventListener('pointerdown', e => { downAt = [e.clientX, e.clientY]; });
+const pointers = new Set();
+let pinching = false;   // set once a gesture uses two fingers, until all are lifted
+const dragged = e => downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4;
+renderer.domElement.addEventListener('pointerdown', e => {
+  pointers.add(e.pointerId);
+  if (pointers.size > 1) { pinching = true; autoZoom = false; }
+  else downAt = [e.clientX, e.clientY];
+});
+function pointerGone(e) {
+  pointers.delete(e.pointerId);
+  const wasPinch = pinching;
+  if (pointers.size === 0) pinching = false;
+  return wasPinch;
+}
+renderer.domElement.addEventListener('pointercancel', pointerGone);
 renderer.domElement.addEventListener('pointerup', e => {
-  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) return;
+  if (pointerGone(e) || !downAt || dragged(e)) return;
+  downAt = null;
   follow = nucleusUnder(e);
   if (follow) followOffset.copy(controls.target).sub(nucleusPos(follow));
 });
 renderer.domElement.addEventListener('pointermove', e => {
   if (e.buttons === 0) renderer.domElement.style.cursor = nucleusUnder(e) ? 'pointer' : '';
+  else if (!pinching && dragged(e)) follow = null;
 });
 function updateFollow() {
   if (!follow) return;
@@ -443,6 +468,7 @@ renderer.setAnimationLoop(() => {
     updateFollow();
   }
   controls.update();
+  updateBackground();
   renderer.render(scene, camera);
 });
 </script>
